@@ -1,0 +1,11 @@
+{
+  "display_name": "活下去",
+  "loading_order": 10000,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "author": "dummy-battery",
+  "version": "0.1.0",
+  "homePage": "https://github.com/dummy-battery/huoxiaqu",
+  "generate_interceptor": "deathReturnPromptInterceptorV1"
+}
