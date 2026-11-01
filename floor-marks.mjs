@@ -5,16 +5,27 @@ const text = value => typeof value === 'string' && value.length > 0;
 const time = value => typeof value === 'string' && /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(value);
 const pageId = row => row?.swipe_id ?? 0;
 const requireValue = (ok, reason) => { if (!ok) throw Error(reason); };
-export const floorSourceText = value => String(value ?? '')
-  .replaceAll('<StatusPlaceHolderImpl/>', '')
-  .replaceAll(/<(status_current_variable)>(?:(?!<\1>).)*<\/\1?>/gis, '').trimEnd();
+export const floorSourceText = value => {
+  const source = String(value ?? '').replaceAll('<StatusPlaceHolderImpl/>', '')
+    .replaceAll(/<(status_current_variable)>(?:(?!<\1>).)*<\/\1?>/gis, '').trimEnd();
+  let open = -1, tailStart = -1, tailEnd = -1;
+  for (const tag of source.matchAll(/<\/?UpdateVariable\b/gi)) {
+    const token = source.slice(tag.index).match(/^<\/?UpdateVariable>/i)?.[0];
+    if (!token) return source;
+    if (token[1] !== '/') { if (open !== -1) return source; open = tag.index; }
+    else { if (open === -1) return source; tailStart = open; tailEnd = tag.index + token.length; open = -1; }
+  }
+  if (open !== -1 || tailStart === -1 || source.slice(tailEnd).trim()) return source;
+  const head = source.slice(0, tailStart);
+  return /(?:^|\n)\s*$/.test(head) ? head.trimEnd() : source;
+};
 
 export function readFloorMark(row) {
   const root = row?.extra?.[FLOOR_MARK_KEY];
   const page = pageId(row);
   const mark = root?.pages?.[String(page)];
   if (root?.version !== 1 || !text(root.uid) || !integer(page)
-      || mark?.sourceText !== floorSourceText(row.mes) || !Array.isArray(mark.events)) return null;
+      || typeof mark?.sourceText !== 'string' || floorSourceText(mark.sourceText) !== floorSourceText(row.mes) || !Array.isArray(mark.events)) return null;
   return { uid: root.uid, page, events: clone(mark.events) };
 }
 
@@ -29,7 +40,8 @@ function target(records, index, swipeId, mint) {
   const root = old ? clone(old) : { version: 1, uid, pages: {} };
   const previous = root.pages[String(swipeId)];
   const sourceText = floorSourceText(row.mes);
-  const page = previous?.sourceText === sourceText ? clone(previous) : { sourceText, events: [] };
+  const page = typeof previous?.sourceText === 'string' && floorSourceText(previous.sourceText) === sourceText ? clone(previous) : { sourceText, events: [] };
+  page.sourceText = sourceText;
   requireValue(Array.isArray(page.events), 'FLOOR_EVENTS_INVALID');
   return { row, root, page, uid, swipeId };
 }

@@ -4,7 +4,7 @@ const ignore = Symbol.for('ignore');
 const integer = value => Number.isSafeInteger(value) && value >= 0;
 const selectedPage = row => row?.swipe_id ?? 0;
 const sameSource = (mark, row, source) => mark?.uid === source?.uid
-  && mark.page === source.swipeId && floorSourceText(row.mes) === source.sourceText;
+  && mark.page === source.swipeId && floorSourceText(row.mes) === floorSourceText(source.sourceText);
 const note = mes => ({ name: 'Narrator', is_user: false, is_system: false,
   mes, extra: { type: 'narrator' } });
 const unavailable = code => ({ available: false, code, rows: null });
