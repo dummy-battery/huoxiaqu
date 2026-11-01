@@ -8,7 +8,8 @@ const promptOnly = (nodeId, mes, kind) => ({ name: 'Narrator', is_user: false, i
 
 function snapshotProof(archive, record, records, proof) {
     const c = archive.anchor;
-    const source = records.get(c.sourceMessageUid);
+    const liveSource=records.get(c.sourceMessageUid);
+    const source=liveSource?.revision===c.sourceRevision?liveSource:proof.versionSources?.find(v=>v.uid===c.sourceMessageUid&&v.revision===c.sourceRevision&&v.swipeId===c.sourceSwipeId);
     must(c.type === 'exact-snapshot' && c.anchorId === record.anchorId && c.exact === true
         && c.committed === true && id(c.captureId) && c.ledgerRevision === proof.ledgerRevision
         && source?.uid && source.revision === c.sourceRevision && source.swipeId === c.sourceSwipeId,
@@ -19,8 +20,9 @@ function snapshotProof(archive, record, records, proof) {
         && typeof c.snapshotMes === 'string' && c.snapshotMes.length > 0
         && c.snapshotMes === record.sourceMes && c.frontierBeforeId === record.parentId,
     'snapshot-capture-mismatch');
-    must(c.sourceSpan === 'mixed' || c.sourceSpan === 'whole', 'invalid-snapshot-span');
-    if (c.sourceSpan === 'mixed') must(source.position > record.position
+    must(c.sourceSpan === 'mixed' || c.sourceSpan === 'whole' || c.sourceSpan==='version-whole', 'invalid-snapshot-span');
+    if(c.sourceSpan==='version-whole')must(source.kind==='checkpoint'&&source.position>record.position&&source.gameTime===record.gameTime&&c.spanStartTime===c.spanEndTime,'native-version-whole-anchor-unproven');
+    else if (c.sourceSpan === 'mixed') must(source.position > record.position
         && (source.kind === 'ordinary' || (source.kind === 'death' && source.visibility === 'visible'
             && !source.isUser && source.timelineId === record.timelineId
             && archive.createdAfterId === source.nodeId && c.gameTime < source.gameTime))
@@ -107,11 +109,14 @@ export function projectRequest(coreChat, proof, type, returnOutput = null) {
         must((proof.frontierId ?? proof.frontierUid) === frontier, 'stale-ledger-frontier');
         const path = frontier === null ? [] : pathFor(frontier), active = new Set(path);
         must([...records.values()].filter(r => r.kind !== 'input').at(-1)?.kind !== 'death', 'pending-death-recovery');
+        const omitted = new Set(proof.omittedSources ?? []);
+        must([...omitted].every(id), 'invalid-omitted-source');
         const selected = new Map();
         for (const [index, row] of request.entries()) {
             must(id(row.uid) && !selected.has(row.uid), 'missing-or-ambiguous-message-uid');
+            if (omitted.has(row.uid)) continue;
             const r = records.get(row.uid);
-            must(r?.visibility === 'visible' && !row.ignored && !row.isSystem, 'request-visibility-mismatch');
+            must(r?.hidden !== true && (r?.visibility === 'visible' || r?.visibility === 'system-filtered') && !row.ignored && !row.isSystem, 'request-visibility-mismatch');
             must(row.revision === r.revision && row.swipeId === r.swipeId && row.isUser === r.isUser, 'changed-message-version');
             must(!row.narrator || !row.isUser, 'ambiguous-narrator-role');
             selected.set(r.nodeId, { record: r, index });
@@ -120,12 +125,13 @@ export function projectRequest(coreChat, proof, type, returnOutput = null) {
         must(positions.every((p, i) => i === 0 || p > positions[i - 1]), 'request-order-not-native');
         for (const r of records.values()) {
             if (r.visibility === 'ignored') { must(r.kind === 'ordinary', 'intentionally-hidden-boundary'); continue; }
-            if (r.visibility === 'system-filtered' && boundary.has(r.kind)) {
+            if ((r.hidden === true || r.hidden === undefined && r.visibility === 'system-filtered') && boundary.has(r.kind)) {
                 // Owner-certified genesis checkpoint: identity/state source only, never a body.
                 if (r.promptDisposition === 'mechanical-source') continue;
-                must(r.restore?.reason === 'native-system-filter' && r.restore.revision === r.revision && !r.isUser,
+                must(['native-system-filter','signed-boundary'].includes(r.restore?.reason) && r.restore.revision === r.revision && !r.isUser,
                     'unproven-system-restoration');
-                if (r.position >= positions[0] && r.position <= positions.at(-1)) {
+                if (r.position >= positions[0] && r.position <= positions.at(-1)
+                    || proof.narrativeTarget?.archiveId && [...archives.values()].some(a => a.archiveId === proof.narrativeTarget.archiveId && a.frontierId === r.nodeId)) {
                     selected.set(r.nodeId, { record: r, index: null });
                 }
             }
@@ -224,7 +230,9 @@ export function projectRequest(coreChat, proof, type, returnOutput = null) {
             if (raw) ownership.push({ row, sourceIndex: unit.index, prefix, suffix });
             return row;
         };
-        const ledgerRows = [...records.values()].filter(r => r.kind === 'return').map((event, i) => {
+        const ledgerRows = [...records.values()].filter(r => r.kind === 'return' && (r === targetEvent
+            || r.position >= positions[0] && r.position <= positions.at(-1)
+            || selected.has(r.deathUid) || selected.has(r.sceneMessageUid))).map((event, i) => {
             const a = archives.get(event.targetArchiveId), captured = records.get(a.frontierId), death = records.get(event.deathUid);
             const pending = event === targetEvent ? '回归后具体情景待本次生成；依目标档时间、地点、状态续写。'
                 : '本注释只记录机械恢复，不代替回归剧情正文。';
